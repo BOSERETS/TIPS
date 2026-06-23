@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#2f4a3c">
+<title>Topo-Rando — CimeEnvie</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <button class="btn btn-icon" id="backBtn" type="button" aria-label="Retour" hidden>‹</button>
+  <h1 id="topTitle">Topo-Rando</h1>
+  <div class="controls">
+    <button class="btn btn-icon" id="toggleAll" type="button" aria-label="Tout ouvrir / replier" hidden>▾</button>
+    <button class="btn btn-icon" id="toggleTheme" type="button" aria-label="Changer le thème">◐</button>
+  </div>
+</header>
+
+<main id="view" class="wrap"></main>
+
+<input type="file" id="fileInput" accept="application/json,.json" hidden>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
