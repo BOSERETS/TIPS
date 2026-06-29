@@ -4,8 +4,9 @@
 
 // ---------- IndexedDB ----------
 const DB_NAME = 'topo-rando-db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE = 'parcours';
+const PREFS = 'prefs';
 
 function openDB() {
   return new Promise((resolve, reject) => {
@@ -16,9 +17,32 @@ function openDB() {
         const os = db.createObjectStore(STORE, { keyPath: 'id' });
         os.createIndex('lastOpened', 'lastOpened');
       }
+      if (!db.objectStoreNames.contains(PREFS)) {
+        db.createObjectStore(PREFS, { keyPath: 'key' });
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
+  });
+}
+
+async function prefGet(key) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction(PREFS, 'readonly');
+    const req = tx.objectStore(PREFS).get(key);
+    req.onsuccess = () => resolve(req.result ? req.result.value : null);
+    req.onerror = () => resolve(null);
+  });
+}
+
+async function prefSet(key, value) {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction(PREFS, 'readwrite');
+    tx.objectStore(PREFS).put({ key, value });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => resolve();
   });
 }
 
@@ -127,16 +151,35 @@ const speech = {
   index: 0,
   playing: false,
   paused: false,
-  voice: null
+  voice: null,
+  preferredVoiceName: null  // nom de la voix choisie par l'utilisateur
 };
 
-function pickFrenchVoice() {
+function frenchVoices() {
+  if (!speech.supported) return [];
+  const voices = speechSynthesis.getVoices() || [];
+  return voices.filter(v => /^fr[-_]/i.test(v.lang) || /fr/i.test(v.lang));
+}
+
+function pickVoice() {
   if (!speech.supported) return null;
   const voices = speechSynthesis.getVoices() || [];
-  // Préférer une voix fr-FR / fr-BE
-  let v = voices.find(x => /^fr[-_]/i.test(x.lang)) ||
-          voices.find(x => /fr/i.test(x.lang));
-  return v || null;
+  // 1) priorité absolue : la voix choisie par l'utilisateur (mémorisée)
+  if (speech.preferredVoiceName) {
+    const chosen = voices.find(v => v.name === speech.preferredVoiceName);
+    if (chosen) return chosen;
+  }
+  // 2) sinon, première voix française disponible
+  const fr = frenchVoices();
+  if (fr.length) return fr[0];
+  // 3) sinon, on laisse null (le navigateur prendra sa voix par défaut)
+  return null;
+}
+
+// Charger la préférence de voix au démarrage
+async function loadVoicePref() {
+  speech.preferredVoiceName = await prefGet('voiceName');
+  speech.voice = pickVoice();
 }
 
 // Un parcours est lisible s'il a au moins un texte_audio quelque part
@@ -239,7 +282,7 @@ function startSpeech(d) {
   speech.index = 0;
   speech.playing = true;
   speech.paused = false;
-  speech.voice = pickFrenchVoice();
+  speech.voice = pickVoice();
   showAudioBar(true);
   speakCurrent();
 }
@@ -303,6 +346,7 @@ function showAudioBar(show) {
       bar.innerHTML = `
         <div class="audio-label">Lecture…</div>
         <div class="audio-controls">
+          <button class="btn btn-icon" data-audio="voice" aria-label="Choisir la voix">🗣</button>
           <button class="btn btn-icon" data-audio="prev" aria-label="Point précédent">⏮</button>
           <button class="btn btn-icon" data-audio="play" aria-label="Pause / reprise">⏸</button>
           <button class="btn btn-icon" data-audio="next" aria-label="Point suivant">⏭</button>
@@ -310,6 +354,7 @@ function showAudioBar(show) {
         </div>
       `;
       document.body.appendChild(bar);
+      bar.querySelector('[data-audio="voice"]').addEventListener('click', openVoicePicker);
       bar.querySelector('[data-audio="prev"]').addEventListener('click', skipToPrevPoi);
       bar.querySelector('[data-audio="play"]').addEventListener('click', pauseSpeech);
       bar.querySelector('[data-audio="next"]').addEventListener('click', skipToNextPoi);
@@ -328,9 +373,85 @@ function updateAudioBar() {
   if (playBtn) playBtn.textContent = speech.paused ? '▶' : '⏸';
 }
 
+// Sélecteur de voix : liste les voix françaises et mémorise le choix
+function openVoicePicker() {
+  const voices = frenchVoices();
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+
+  let options;
+  if (voices.length === 0) {
+    options = `<p class="note">Aucune voix française détectée sur cet appareil. Vérifiez les réglages de synthèse vocale d'Android.</p>`;
+  } else {
+    options = '<div class="voice-list">' + voices.map(v => {
+      const checked = (speech.preferredVoiceName === v.name) ? 'checked' : '';
+      const isDefault = (!speech.preferredVoiceName && v === voices[0]) ? ' (actuelle)' : '';
+      return `
+        <label class="voice-item">
+          <input type="radio" name="voice" value="${escapeHTML(v.name)}" ${checked}>
+          <span class="voice-name">${escapeHTML(v.name)}${isDefault}</span>
+          <span class="voice-lang">${escapeHTML(v.lang)}</span>
+          <button class="btn voice-test" type="button" data-test="${escapeHTML(v.name)}">Tester</button>
+        </label>
+      `;
+    }).join('') + '</div>';
+  }
+
+  backdrop.innerHTML = `
+    <div class="modal modal-voice">
+      <h3>Choisir la voix de lecture</h3>
+      <p>Sélectionnez la voix française qui vous convient. Le choix est mémorisé.</p>
+      ${options}
+      <div class="modal-actions">
+        <button class="btn" data-cancel type="button">Fermer</button>
+        <button class="btn btn-primary" data-save type="button">Valider</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+
+  // Tester une voix (lit un court échantillon)
+  backdrop.querySelectorAll('[data-test]').forEach(b => {
+    b.addEventListener('click', (e) => {
+      e.preventDefault();
+      const v = voices.find(x => x.name === b.dataset.test);
+      if (!v) return;
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance("Bonjour, ceci est un essai de lecture pour la vallée de la Molignée.");
+      u.voice = v; u.lang = v.lang; u.rate = 1.0;
+      speechSynthesis.speak(u);
+    });
+  });
+
+  backdrop.querySelector('[data-cancel]').addEventListener('click', () => {
+    speechSynthesis.cancel();
+    backdrop.remove();
+  });
+
+  const saveBtn = backdrop.querySelector('[data-save]');
+  if (saveBtn) {
+    saveBtn.addEventListener('click', async () => {
+      const sel = backdrop.querySelector('input[name="voice"]:checked');
+      if (sel) {
+        speech.preferredVoiceName = sel.value;
+        speech.voice = pickVoice();
+        await prefSet('voiceName', sel.value);
+        toast('Voix enregistrée');
+        // Si une lecture est en cours, on l'applique au segment suivant automatiquement
+      }
+      speechSynthesis.cancel();
+      backdrop.remove();
+    });
+  }
+
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) { speechSynthesis.cancel(); backdrop.remove(); }
+  });
+}
+
 // Certaines plateformes chargent les voix de façon asynchrone
 if (speech.supported && typeof speechSynthesis.onvoiceschanged !== 'undefined') {
-  speechSynthesis.onvoiceschanged = () => { speech.voice = pickFrenchVoice(); };
+  speechSynthesis.onvoiceschanged = () => { speech.voice = pickVoice(); };
 }
 
 let currentParcoursData = null;
@@ -665,4 +786,5 @@ function registerSW() {
 initTheme();
 bindGlobals();
 registerSW();
+loadVoicePref();
 handleHashChange();

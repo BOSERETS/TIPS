@@ -248,3 +248,23 @@ details.poi.speaking{
 }
 .audio-controls{display:flex;gap:6px;flex-shrink:0;}
 .audio-controls .btn{min-width:44px;min-height:44px;font-size:1rem;}
+
+/* ===== Sélecteur de voix ===== */
+.modal-voice{max-width:440px;}
+.voice-list{margin:0 0 16px;max-height:50vh;overflow-y:auto;}
+.voice-item{
+  display:flex;align-items:center;gap:10px;
+  padding:12px 10px;border-top:1px solid var(--line);
+  cursor:pointer;
+}
+.voice-item:first-child{border-top:none;}
+.voice-item input[type="radio"]{width:20px;height:20px;flex-shrink:0;accent-color:var(--accent);}
+.voice-name{flex:1;font-size:.95rem;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+.voice-lang{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  font-size:.72rem;color:var(--muted);flex-shrink:0;
+}
+.voice-test{
+  font-size:.78rem;padding:6px 10px;min-height:36px;flex-shrink:0;
+}
