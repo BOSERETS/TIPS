@@ -2,7 +2,7 @@
 // Stratégie : cache-first pour les ressources statiques de la coquille.
 // Les données utilisateur (parcours) vivent dans IndexedDB, hors du cache.
 
-const CACHE_NAME = 'topo-rando-v1';
+const CACHE_NAME = 'topo-rando-v2';
 const SHELL = [
   './',
   './index.html',
@@ -10,7 +10,8 @@ const SHELL = [
   './styles.css',
   './manifest.webmanifest',
   './icon-192.png',
-  './icon-512.png'
+  './icon-512.png',
+  './icon-512-maskable.png'
 ];
 
 self.addEventListener('install', (e) => {

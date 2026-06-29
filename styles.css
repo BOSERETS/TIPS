@@ -222,3 +222,29 @@ footer.parcours-footer{
   .home-intro h2{font-size:1.45rem;}
   .parcours-intro h2{font-size:1.35rem;}
 }
+
+/* ===== Lecture vocale ===== */
+.btn-listen{
+  width:100%;font-size:1rem;padding:14px 20px;margin:0 0 18px;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+}
+details.poi.speaking{
+  border-color:var(--accent);
+  box-shadow:0 0 0 2px var(--accent), var(--shadow);
+}
+
+.audio-bar{
+  position:fixed;left:0;right:0;bottom:0;z-index:50;
+  background:var(--card);border-top:1px solid var(--line);
+  padding:10px 14px;
+  padding-bottom:calc(10px + env(safe-area-inset-bottom));
+  display:flex;align-items:center;gap:10px;
+  box-shadow:0 -4px 14px rgba(0,0,0,.12);
+}
+.audio-label{
+  flex:1;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  font-size:.85rem;color:var(--ink);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.audio-controls{display:flex;gap:6px;flex-shrink:0;}
+.audio-controls .btn{min-width:44px;min-height:44px;font-size:1rem;}

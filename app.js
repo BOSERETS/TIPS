@@ -109,7 +109,7 @@ function toast(msg) {
 function validateParcours(obj) {
   if (!obj || typeof obj !== 'object') return 'JSON invalide.';
   if (typeof obj.version !== 'number') return 'Champ "version" manquant.';
-  if (obj.version > 1) return `Version ${obj.version} non supportée par cette PWA.`;
+  if (obj.version > 2) return `Version ${obj.version} non supportée par cette PWA.`;
   if (!obj.id || typeof obj.id !== 'string') return 'Champ "id" manquant ou invalide.';
   if (!obj.titre) return 'Champ "titre" manquant.';
   if (!Array.isArray(obj.pois) || obj.pois.length === 0) return 'Aucun POI dans le parcours.';
@@ -119,6 +119,221 @@ function validateParcours(obj) {
   }
   return null; // OK
 }
+
+// ---------- Lecture vocale (Web Speech API) ----------
+const speech = {
+  supported: ('speechSynthesis' in window),
+  queue: [],       // liste de segments { text, poiNum }
+  index: 0,
+  playing: false,
+  paused: false,
+  voice: null
+};
+
+function pickFrenchVoice() {
+  if (!speech.supported) return null;
+  const voices = speechSynthesis.getVoices() || [];
+  // Préférer une voix fr-FR / fr-BE
+  let v = voices.find(x => /^fr[-_]/i.test(x.lang)) ||
+          voices.find(x => /fr/i.test(x.lang));
+  return v || null;
+}
+
+// Un parcours est lisible s'il a au moins un texte_audio quelque part
+function parcoursHasAudio(d) {
+  if (!d || !Array.isArray(d.pois)) return false;
+  return d.pois.some(p =>
+    (p.audio_intro && p.audio_intro.trim()) ||
+    (p.audio_conclusion && p.audio_conclusion.trim()) ||
+    (Array.isArray(p.puces) && p.puces.some(pu => pu.texte_audio && pu.texte_audio.trim()))
+  );
+}
+
+// Construit la file de segments à lire pour tout le parcours
+function buildSpeechQueue(d) {
+  const q = [];
+  // Annonce d'ouverture : titre du parcours
+  q.push({ text: 'Topo : ' + (d.titre || ''), poiNum: null });
+  for (const p of d.pois) {
+    // Annonce du point
+    q.push({ text: 'Point ' + numToSpoken(p.num) + '. ' + (p.titre || '') + '.', poiNum: p.num });
+    if (p.audio_intro && p.audio_intro.trim()) {
+      q.push({ text: p.audio_intro.trim(), poiNum: p.num });
+    }
+    for (const pu of (p.puces || [])) {
+      const t = (pu.texte_audio && pu.texte_audio.trim()) || '';
+      if (t) q.push({ text: t, poiNum: p.num });
+    }
+    if (p.audio_conclusion && p.audio_conclusion.trim()) {
+      q.push({ text: p.audio_conclusion.trim(), poiNum: p.num });
+    }
+  }
+  return q;
+}
+
+function numToSpoken(num) {
+  // "03" -> "3" (la voix lit mieux sans le zéro initial)
+  const n = parseInt(num, 10);
+  return isNaN(n) ? num : String(n);
+}
+
+function speakCurrent() {
+  if (!speech.playing || speech.index >= speech.queue.length) {
+    stopSpeech();
+    return;
+  }
+  const seg = speech.queue[speech.index];
+  const u = new SpeechSynthesisUtterance(seg.text);
+  if (speech.voice) u.voice = speech.voice;
+  u.lang = (speech.voice && speech.voice.lang) || 'fr-FR';
+  u.rate = 1.0;
+  u.pitch = 1.0;
+  u.onend = () => {
+    if (!speech.playing) return;
+    speech.index++;
+    // petite respiration entre POI : si le prochain segment change de POI, micro-pause
+    speakCurrent();
+  };
+  u.onerror = () => {
+    if (!speech.playing) return;
+    speech.index++;
+    speakCurrent();
+  };
+  // Met en évidence le POI en cours de lecture
+  highlightSpeakingPoi(seg.poiNum);
+  speechSynthesis.speak(u);
+}
+
+function highlightSpeakingPoi(num) {
+  document.querySelectorAll('details.poi.speaking').forEach(d => d.classList.remove('speaking'));
+  if (num) {
+    const t = document.getElementById('poi' + num);
+    if (t) {
+      t.classList.add('speaking');
+      t.open = true;
+    }
+  }
+  // Met à jour le bandeau de lecture
+  const bar = document.getElementById('audioBar');
+  if (bar && speech.playing) {
+    const seg = speech.queue[speech.index];
+    const label = bar.querySelector('.audio-label');
+    if (label) {
+      if (seg && seg.poiNum) {
+        const poi = currentParcoursData && currentParcoursData.pois.find(p => p.num === seg.poiNum);
+        label.textContent = poi ? ('Point ' + numToSpoken(poi.num) + ' — ' + poi.titre) : 'Lecture…';
+      } else {
+        label.textContent = 'Introduction…';
+      }
+    }
+  }
+}
+
+function startSpeech(d) {
+  if (!speech.supported) {
+    toast('Lecture vocale non disponible sur ce navigateur');
+    return;
+  }
+  speechSynthesis.cancel();
+  speech.queue = buildSpeechQueue(d);
+  speech.index = 0;
+  speech.playing = true;
+  speech.paused = false;
+  speech.voice = pickFrenchVoice();
+  showAudioBar(true);
+  speakCurrent();
+}
+
+function stopSpeech() {
+  speech.playing = false;
+  speech.paused = false;
+  speechSynthesis.cancel();
+  document.querySelectorAll('details.poi.speaking').forEach(d => d.classList.remove('speaking'));
+  showAudioBar(false);
+}
+
+function pauseSpeech() {
+  if (!speech.playing) return;
+  if (speech.paused) {
+    speechSynthesis.resume();
+    speech.paused = false;
+  } else {
+    speechSynthesis.pause();
+    speech.paused = true;
+  }
+  updateAudioBar();
+}
+
+function skipToNextPoi() {
+  if (!speech.playing) return;
+  const cur = speech.queue[speech.index];
+  const curPoi = cur ? cur.poiNum : null;
+  let i = speech.index;
+  // avancer jusqu'au prochain segment dont le poiNum change et est non-null
+  while (i < speech.queue.length && (speech.queue[i].poiNum === curPoi || speech.queue[i].poiNum === null)) i++;
+  if (i >= speech.queue.length) { stopSpeech(); return; }
+  speech.index = i;
+  speechSynthesis.cancel();
+  speakCurrent();
+}
+
+function skipToPrevPoi() {
+  if (!speech.playing) return;
+  const cur = speech.queue[speech.index];
+  const curPoi = cur ? cur.poiNum : null;
+  // reculer jusqu'au début du POI courant, puis encore au POI précédent
+  let i = speech.index - 1;
+  while (i > 0 && (speech.queue[i].poiNum === curPoi || speech.queue[i].poiNum === null)) i--;
+  // i est maintenant sur le dernier segment du POI précédent → remonter à son début
+  const prevPoi = speech.queue[i] ? speech.queue[i].poiNum : null;
+  while (i > 0 && speech.queue[i - 1].poiNum === prevPoi) i--;
+  speech.index = Math.max(0, i);
+  speechSynthesis.cancel();
+  speakCurrent();
+}
+
+// Bandeau de contrôle de lecture
+function showAudioBar(show) {
+  let bar = document.getElementById('audioBar');
+  if (show) {
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'audioBar';
+      bar.className = 'audio-bar';
+      bar.innerHTML = `
+        <div class="audio-label">Lecture…</div>
+        <div class="audio-controls">
+          <button class="btn btn-icon" data-audio="prev" aria-label="Point précédent">⏮</button>
+          <button class="btn btn-icon" data-audio="play" aria-label="Pause / reprise">⏸</button>
+          <button class="btn btn-icon" data-audio="next" aria-label="Point suivant">⏭</button>
+          <button class="btn btn-icon" data-audio="stop" aria-label="Arrêter">✕</button>
+        </div>
+      `;
+      document.body.appendChild(bar);
+      bar.querySelector('[data-audio="prev"]').addEventListener('click', skipToPrevPoi);
+      bar.querySelector('[data-audio="play"]').addEventListener('click', pauseSpeech);
+      bar.querySelector('[data-audio="next"]').addEventListener('click', skipToNextPoi);
+      bar.querySelector('[data-audio="stop"]').addEventListener('click', stopSpeech);
+    }
+    bar.hidden = false;
+  } else if (bar) {
+    bar.hidden = true;
+  }
+}
+
+function updateAudioBar() {
+  const bar = document.getElementById('audioBar');
+  if (!bar) return;
+  const playBtn = bar.querySelector('[data-audio="play"]');
+  if (playBtn) playBtn.textContent = speech.paused ? '▶' : '⏸';
+}
+
+// Certaines plateformes chargent les voix de façon asynchrone
+if (speech.supported && typeof speechSynthesis.onvoiceschanged !== 'undefined') {
+  speechSynthesis.onvoiceschanged = () => { speech.voice = pickFrenchVoice(); };
+}
+
+let currentParcoursData = null;
 
 // ---------- État & navigation ----------
 const state = {
@@ -162,6 +377,8 @@ async function handleHashChange() {
 async function renderHome() {
   state.view = 'home';
   state.currentId = null;
+  currentParcoursData = null;
+  if (speech.playing) stopSpeech();
   setTopBar({ title: 'Topo-Rando' });
 
   const view = document.getElementById('view');
@@ -250,6 +467,8 @@ async function renderParcours(id, focusPoi) {
   dbPut(rec).catch(() => {});
 
   const d = rec.data;
+  currentParcoursData = d;
+  stopSpeech(); // au cas où une lecture tournait
   setTopBar({ title: d.titre || id, showBack: true, showToggleAll: true });
 
   const view = document.getElementById('view');
@@ -271,6 +490,12 @@ async function renderParcours(id, focusPoi) {
       </ol>
     </nav>
   `;
+
+  // Bouton de lecture vocale, seulement si le parcours a une piste audio et que le navigateur la supporte
+  if (speech.supported && parcoursHasAudio(d)) {
+    html = html.replace('<nav class="toc"',
+      `<button class="btn btn-primary btn-listen" id="listenBtn" type="button">▶ Écouter le parcours</button>\n    <nav class="toc"`);
+  }
 
   for (const p of d.pois) {
     const accroche = p.accroche ? `<div class="accroche">« ${escapeHTML(p.accroche)} »</div>` : '';
@@ -297,6 +522,12 @@ async function renderParcours(id, focusPoi) {
   html += `<footer class="parcours-footer">CimeEnvie ASBL — Belgique${d.date_generation ? ' — ' + escapeHTML(d.date_generation) : ''}</footer>`;
 
   view.innerHTML = html;
+
+  // Bouton Écouter le parcours
+  const listenBtn = document.getElementById('listenBtn');
+  if (listenBtn) {
+    listenBtn.addEventListener('click', () => startSpeech(d));
+  }
 
   // Handlers du sommaire : ouvrir le POI cible
   view.querySelectorAll('[data-poi-jump]').forEach(a => {
